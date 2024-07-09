@@ -721,32 +721,10 @@ class BurpExtender(IBurpExtender, ITab, IMessageEditorController, IContextMenuFa
             filein = open(fileName,'r')
             jsonText = filein.read()
             filein.close()
-            # Check if using on older state file compatible with v0.5.2 or greater
-            if not jsonText or jsonText[0] !="{":
-                warning = """
-                CAUTION: 
-    
-                Loading a saved configuration prior to v0.6.3 deserializes data into Jython objects. 
-                This action may pose a security threat to the application.
-                Only proceed when the source and contents of this file is trusted. 
-    
-                Load Selected File?
-                """
-                result = JOptionPane.showOptionDialog(self._splitpane, 
-                    warning, "Caution", 
-                    JOptionPane.YES_NO_OPTION, 
-                    JOptionPane.WARNING_MESSAGE, 
-                    None, 
-                    ["OK", "Cancel"],
-                    "OK")
-
-                if result != JOptionPane.YES_OPTION:
-                    return
-                self._db.loadLegacy(fileName,self)
-            else:
-                self._db.loadJson(jsonText,self)
-                # TODO currently can load exention settings, but this is saved for Burp and not for the Project specifically
-                # self._db.loadJson(self._callbacks.loadExtensionSetting("AUTHMATRIX"),self)
+            
+            self._db.loadJson(jsonText,self)
+            # TODO currently can load exention settings, but this is saved for Burp and not for the Project specifically
+            # self._db.loadJson(self._callbacks.loadExtensionSetting("AUTHMATRIX"),self)
 
             self._userTable.redrawTable()
             self._messageTable.redrawTable()
@@ -1420,103 +1398,6 @@ class MatrixDB():
         self.arrayOfRegexes = []
         self.lock.release()
 
-    def loadLegacy(self, fileName, extender):
-        from java.io import ObjectOutputStream;
-        from java.io import FileOutputStream;
-        from java.io import ObjectInputStream;
-        from java.io import FileInputStream;
-
-        FAILURE_REGEX_SERIALIZE_CODE = "|AUTHMATRIXFAILUREREGEXPREFIX|"
-        AUTHMATRIX_SERIALIZE_CODE = "|AUTHMATRIXCOOKIEHEADERSERIALIZECODE|"
-
-        ins = ObjectInputStream(FileInputStream(fileName))
-        db=ins.readObject()
-        ins.close()
-
-        self.lock.acquire()
-        self.arrayOfUsers = ArrayList()
-        self.arrayOfRoles = ArrayList()
-        self.arrayOfMessages = ArrayList()
-        self.arrayOfChains = ArrayList()
-        self.deletedUserCount = db.deletedUserCount
-        self.deletedRoleCount = db.deletedRoleCount
-        self.deletedMessageCount = db.deletedMessageCount
-        self.deletedChainCount = 0 # Updated with chain entries below in arrayOfUsers
-        self.arrayOfSVs = ArrayList()
-        self.headerCount = 1 # Legacy states had one header only
-        self.arrayOfRegexes = []
-
-        for message in db.arrayOfMessages:
-            if message._successRegex.startswith(FAILURE_REGEX_SERIALIZE_CODE):
-                regex = message._successRegex[len(FAILURE_REGEX_SERIALIZE_CODE):]
-                failureRegexMode=True
-            else:
-                regex = message._successRegex
-                failureRegexMode=False
-            messageEntry = RequestResponseStored(extender, message._host, message._port, message._protocol, message._requestData)
-            self.arrayOfMessages.add(MessageEntry(
-                message._index,
-                message._tableRow,
-                messageEntry,
-                message._name, message._roles, regex, message._deleted, failureRegexMode))
-
-        for role in db.arrayOfRoles:
-            self.arrayOfRoles.add(RoleEntry(
-                role._index,
-                role._mTableColumn-3, # NOTE this is done to preserve compatability with older state files
-                role._name,
-                role._deleted))
-        
-        for user in db.arrayOfUsers:
-            # NOTE to preserve backwords compatability, chains are stored here in a really hacky way
-            if type(user._roles) == int:
-                # Chain
-                self.deletedChainCount = user._roles
-                
-                name=""
-                sourceUser=""
-                if user._name:
-                    namesplit = user._name.split(AUTHMATRIX_SERIALIZE_CODE)
-                    name=namesplit[0]
-                    if len(namesplit)>1:
-                        sourceUser=namesplit[1]
-
-                token = user._token.split(AUTHMATRIX_SERIALIZE_CODE)
-                assert(len(token)==2)
-                fromID = token[0]
-                fromRegex = token[1]
-                staticcsrf = user._staticcsrf.split(AUTHMATRIX_SERIALIZE_CODE)
-                assert(len(staticcsrf)==2)
-                toID = staticcsrf[0]
-                toRegex = staticcsrf[1]
-                self.arrayOfChains.add(ChainEntry(
-                    int(user._index),
-                    int(user._tableRow),
-                    name,
-                    fromID,
-                    fromRegex,
-                    toID,
-                    toRegex,
-                    user._deleted,
-                    sourceUser
-                    ))
-            else: 
-                # Normal User
-                token = [""] if not user._token else user._token.split(AUTHMATRIX_SERIALIZE_CODE)
-                cookies = token[0]
-                header = "" if len(token)==1 else token[1]
-                name = "" if not user._name else user._name
-                self.arrayOfUsers.add(UserEntry(
-                    int(user._index),
-                    int(user._tableRow),
-                    name,
-                    user._roles,
-                    user._deleted,
-                    cookies,
-                    headers=[header]))
-
-        self.lock.release()
-
     def loadJson(self, jsonText, extender):
         # NOTE: Weird issue where saving serialized json for configs loaded from old states (pre v0.6.3)
         # doesn't use correct capitalization on bools.
@@ -1859,7 +1740,6 @@ class MatrixDB():
                 "userValues":SVEntry._userValues
                 })
 
-        # BUG: this is not using the correct capitalization on booleans after loading legacy states
         return json.dumps(stateDict)
 
     def getActiveUserIndexes(self):
@@ -3189,64 +3069,3 @@ class RowTransferHandler(TransferHandler):
 
 
         return True
-
-
-
-##
-## LEGACY SERIALIZABLE CLASSES
-##
-
-# Serializable DB
-# Used to store Database to Disk on Save and Load
-class MatrixDBData():
-
-    def __init__(self, arrayOfMessages, arrayOfRoles, arrayOfUsers, deletedUserCount, deletedRoleCount, deletedMessageCount):
-        
-        self.arrayOfMessages = arrayOfMessages
-        self.arrayOfRoles = arrayOfRoles
-        self.arrayOfUsers = arrayOfUsers
-        self.deletedUserCount = deletedUserCount
-        self.deletedRoleCount = deletedRoleCount
-        self.deletedMessageCount = deletedMessageCount
-
-# Serializable MessageEntry
-# Used since the Burp RequestResponse object can not be serialized
-class MessageEntryData:
-
-    def __init__(self, index, tableRow, requestData, host, port, protocol, name, roles, successRegex, deleted):
-        self._index = index
-        self._tableRow = tableRow
-        self._requestData = requestData
-        self._host = host
-        self._port = port
-        self._protocol = protocol
-        self._url = "" # NOTE obsolete, kept for backwords compatability
-        self._name = name
-        self._roles = roles
-        # NOTE: to preserve backwords compatability, successregex will have a specific prefix "|AMFAILURE|" to indicate FailureRegexMode
-        self._successRegex = successRegex
-        self._deleted = deleted
-        return
-
-class RoleEntryData:
-
-    def __init__(self,index,mTableColumnIndex,uTableColumnIndex,name,deleted):
-        self._index = index
-        self._name = name
-        self._deleted = deleted
-        # NOTE: to preserve backwords compatibility, these will be the dynamic column +3
-        self._mTableColumn = mTableColumnIndex
-        self._uTableColumn = uTableColumnIndex
-        return
-
-class UserEntryData:
-
-    def __init__(self, index, tableRow, name, roles, deleted, token, staticcsrf):
-        self._index = index
-        self._name = name
-        self._roles = roles
-        self._deleted = deleted
-        self._tableRow = tableRow
-        self._token = token
-        self._staticcsrf = staticcsrf
-        return
