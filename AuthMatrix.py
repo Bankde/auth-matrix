@@ -561,38 +561,36 @@ class BurpExtender(IBurpExtender, ITab, IMessageEditorController, IContextMenuFa
 
     def createMenuItems(self, invocation):
 
+        selfExtender = self
         
-
-
-        def addRequestsToTab(e):
-            for messageInfo in messages:
-                requestInfo = self._helpers.analyzeRequest(messageInfo)
-                name = str(requestInfo.getMethod()).ljust(8) + requestInfo.getUrl().getPath()
-                # Grab regex from response
-                regex = "^HTTP/1\\.1 200 OK"
-                response = messageInfo.getResponse()
-                if response:
-                    responseInfo=self._helpers.analyzeResponse(response)
-                    if len(responseInfo.getHeaders()):
-                        responseCodeHeader = responseInfo.getHeaders()[0]
-                        regex = "^"+re.escape(responseCodeHeader)
-                # Must create a new RequestResponseStored object since modifying the original messageInfo
-                # from its source (such as Repeater) changes this saved object. MessageInfo is a reference, not a copy
-                messageIndex = self._db.createNewMessage(RequestResponseStored(self,requestResponse=messageInfo), name, regex)
-            self._messageTable.redrawTable()
-            self._chainTable.redrawTable()
-            self.highlightTab()
-
+        class addRequestsToTab(ActionListener):
+            def actionPerformed(self, e):
+                for messageInfo in messages:
+                    requestInfo = selfExtender._helpers.analyzeRequest(messageInfo)
+                    name = str(requestInfo.getMethod()).ljust(8) + requestInfo.getUrl().getPath()
+                    # Grab regex from response
+                    regex = "^HTTP/1\\.1 200 OK"
+                    response = messageInfo.getResponse()
+                    if response:
+                        responseInfo=selfExtender._helpers.analyzeResponse(response)
+                        if len(responseInfo.getHeaders()):
+                            responseCodeHeader = responseInfo.getHeaders()[0]
+                            regex = "^"+re.escape(responseCodeHeader)
+                    # Must create a new RequestResponseStored object since modifying the original messageInfo
+                    # from its source (such as Repeater) changes this saved object. MessageInfo is a reference, not a copy
+                    messageIndex = selfExtender._db.createNewMessage(RequestResponseStored(selfExtender,requestResponse=messageInfo), name, regex)
+                selfExtender._messageTable.redrawTable()
+                selfExtender._chainTable.redrawTable()
+                selfExtender.highlightTab()
 
         class UserCookiesActionListener(ActionListener):
-            def __init__(self, currentUser, extender):
+            def __init__(self, currentUser):
                 self.currentUser=currentUser
-                self.extender = extender
 
             def actionPerformed(self, e):
                 for messageInfo in messages:
                     cookieVal = ""
-                    requestInfo = self.extender._helpers.analyzeRequest(messageInfo)
+                    requestInfo = selfExtender._helpers.analyzeRequest(messageInfo)
                     for header in requestInfo.getHeaders():
                         cookieStr = "Cookie: "
                         if header.startswith(cookieStr):
@@ -601,15 +599,15 @@ class BurpExtender(IBurpExtender, ITab, IMessageEditorController, IContextMenuFa
                     # Grab Set-Cookie headers from the responses as well
                     response = messageInfo.getResponse()
                     if response:
-                        responseInfo = self.extender._helpers.analyzeResponse(response)
+                        responseInfo = selfExtender._helpers.analyzeResponse(response)
                         responseCookies = responseInfo.getCookies()
                         newCookies = "; ".join([x.getName()+"="+x.getValue() for x in responseCookies])
                         cookieVal = ModifyMessage.cookieReplace(cookieVal,newCookies)
 
                     self.currentUser._cookies = cookieVal
 
-                self.extender._userTable.redrawTable()
-                self.extender.highlightTab()
+                selfExtender._userTable.redrawTable()
+                selfExtender.highlightTab()
 
         ret = []
         messages = invocation.getSelectedMessages()
@@ -623,14 +621,14 @@ class BurpExtender(IBurpExtender, ITab, IMessageEditorController, IContextMenuFa
 
         if valid:
             menuItem = JMenuItem("Send request(s) to AuthMatrix");
-            menuItem.addActionListener(addRequestsToTab)
+            menuItem.addActionListener(addRequestsToTab())
             ret.append(menuItem)
 
             if len(messages)==1:
                 # Send cookies to user:
                 for user in self._db.getUsersInOrderByRow():
                     menuItem = JMenuItem("Send cookies to AuthMatrix user: "+user._name);
-                    menuItem.addActionListener(UserCookiesActionListener(user, self))
+                    menuItem.addActionListener(UserCookiesActionListener(user))
                     ret.append(menuItem)
 
         return ret
